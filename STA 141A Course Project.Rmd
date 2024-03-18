@@ -1,0 +1,605 @@
+---
+title: "STA 141A Course Project on Neural Activity"
+output: html_document
+date: "2024-03-12 | Zachary Leung | 919679069"
+---
+
+## Abstract
+
+For this course project, I aim to develop a predictive model leveraging neural activity and brain stimuli data from mice trials. I will first thoroughly explore the data set to identify patterns, garnering a better understanding on how variables interact. Utilizing techniques like principle component analysis and clustering learned from this course, I'll derive crucial insights. Subsequently, employing the support vector machine algorithm, I'll construct a prediction model and assess its performance through metrics like accuracy and misclassification error. Furthermore, I'll generate an ROC curve to visualize the model's capabilities. Finally, I'll validate the model using an independent data set that is provided separately, aiming to create an effective predictive tool by the project's conclusion. 
+
+## 1. Introduction
+
+In my report, I aim to develop a predictive model based on a carefully chosen segment of data collected by Steinmetz et al. (2019). This segment focuses on studying the impact of various stimuli and subsequent neural spikes on different types of feedback. The original study, done by Steinmetz, employed Neuropixel probes to gather data from around 30,000 neurons spanning 42 regions of the brain. This was done while observing the behavior of mice engaged in a specific visual task. The data subset I am using encompasses information from 18 sessions involving 10 mice, with each session consisting of several trials. These trials involved presenting visual stimuli on two screens, located to the left and right of the mice, with the stimuli's contrast levels set at {0, .25, .5, 1}, with 0 signifying the absence of a stimulus. The experimental setup required the mice to respond to these stimuli by interacting with a wheel, with rewards given based on their responses. My focus is on analyzing the neural activity, specifically the spike data, which includes details on the timing of neuron activation.
+
+## 2. Exploratory Analysis
+
+
+```{r echo=FALSE, eval=TRUE, message=FALSE}
+
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+}
+
+suppressWarnings(library(tidyverse))
+suppressWarnings(library(knitr))
+suppressWarnings(library(ggplot2))
+suppressWarnings(library(gridExtra))
+suppressWarnings(library(caret))
+suppressWarnings(library(pROC))
+suppressWarnings(library(e1071))
+```
+
+```{r echo=FALSE, eval=TRUE}
+n.session=length(session)
+
+data = tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  data[i,1]=tmp$mouse_name;
+  data[i,2]=tmp$date_exp;
+  data[i,3]=length(unique(tmp$brain_area));
+  data[i,4]=dim(tmp$spks[[1]])[1];
+  data[i,5]=length(tmp$feedback_type);
+  data[i,6]=mean(tmp$feedback_type+1)/2;
+}
+
+
+
+colnames(data) = c("Mouse Name", "Date", "Unique Brain Areas", "Neurons", "Number of Trials", "Success Rate")
+kable(data, format = "html", table.attr = "class='table table-striped'",digits=3) 
+```
+
+The table above gives us a rough outline of what type of data we should expect from the given data set. The first column represents the name of the mouse used for each session. The second column indicates the date each session was held. The unique brain area column indicates which parts of the brain neurons were activated during each trial. The Neurons column indicates the total number of neurons activated in each session. The number of trials represents the total amount of times a respective mouse underwent the experiment. Finally, the success rate represents the overall percentage the mice successfully responded to the stimuli for the given session.
+
+From the table, we note that session 1 received the worst success rate at ~60.5% and session 17 received the highest success rate at ~83%. To view why there is such a large discrepancy, I will run regressions between each predictor variable against our outcome variable (Success Rate) to see if there is any correlation. 
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+ggplot(data, aes(x = `Mouse Name`, y = `Success Rate`)) +
+  geom_point() +
+  labs(x = "Mouse Name", y = "Success Rate", title = "Mouse Name vs Success Rate") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+This plot depicts the relationship between the Mouse Names and Success Rate. In this, we see that the mouse named Lederberg had a higher average success rate relative to the other mice. In contrast, the mouse named Cori seems to have the lowest average success rate.
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+ggplot(data, aes(x = `Unique Brain Areas`, y = `Success Rate`)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Unique Brain Areas", y = "Success Rate", title = "Unique Brain Areas vs Success Rate") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+This plot depicts the relationship between the Unique Brain Areas and Success Rate. The "Unique Brain Areas" variable indicates where the activation of neurons take place. From the graph, there doesn't seem to be a solid correlation between the predictor and outcome variable. This is shown by the great distance most of the points have from the regression line. 
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+ggplot(data, aes(x = `Neurons`, y = `Success Rate`)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Neurons", y = "Success Rate", title = "Neurons vs Success Rate") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+
+This graph depicts the relationship between Neurons and Success Rate. The variable "Neurons" indicated the quantity of neurons that fire during the total quantity of trials. Like the relationship between with the Unique Brain Areas, this relationship seems to have weak correlation as well. This conclusion is drawn from the lack of congregation of the points to the regression line. 
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+ggplot(data, aes(x = `Number of Trials`, y = `Success Rate`)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Number of Trials", y = "Success Rate", title = "Number of Trials vs Success Rate") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+
+This plot depicts the relationship between the Number of Trials and Success Rate. The variable "Number of Trials" represents the total number of trials used for a particular session. Like the previous two plots, the relationship between the two variables seem to have little correlation. The points on the graph seem to have no pattern when it comes to aligning with the regression line. 
+
+The four plots above indicate if any of the predictive variables have any visible correlation to our outcome variable which is success rate. Keep in mind, this is in combination with all 18 sessions. Seeing that there is little to no correlation, I will delve further with a particular session.
+
+
+
+Selecting Session 4:
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+unique(session[[4]]$brain_area)
+nrow(session[[4]]$spks[[4]])
+length(session[[4]]$feedback_type)
+```
+
+
+
+Out of the 18 sessions, I randomly selected session 4. In session 4, I managed to find which sections of the brain the neurons activated were located in. From this, we see that 1,769 neurons were found in LGd, DG, TH, SUB, VPL, VISp, CA1, VISa, LSr, ACA, and MOs part of the mouse's brain. This was recorded over a session consisting of 249 trials.   
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+sessionNum = 4
+trialNum = 88 
+
+spiketrial = session[[sessionNum]]$spks[[trialNum]]
+brainarea = session[[sessionNum]]$brain_area
+
+spikecount = apply(spiketrial, 1, sum)
+
+newtmp = data.frame(
+  area = brainarea,
+  spikes = spikecount
+)
+
+
+spikeavg = newtmp %>%
+  group_by(area) %>%
+  summarize(mean = mean(spikes))
+
+avgspikebyarea = function(trialNum, sessionNum){
+  spiketrial = sessionNum$spks[[trialNum]]
+  area = sessionNum$brain_area
+  spkcount = apply(spiketrial, 1, sum)
+  spikeavg = tapply(spkcount, area, mean)
+  return(spikeavg)
+}
+
+avgspikebyarea(trialNum, session[[sessionNum]])
+```
+
+
+Looking further into session 4, I picked a random trial to see the average spikes per brain area. I picked trial 88 and noticed that the average spikes were between 0.6 and 2.5. The brain area with the highest average spikes is VISp at ~2.23 and the brain area with the lowest average spikes is ACA. 
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+numoftrials = length(session[[sessionNum]]$feedback_type)
+numofareas = length(unique(session[[sessionNum]]$brain_area))
+
+trial.summary = matrix(nrow=numoftrials, ncol= numofareas+1+2+1)
+for(i in 1:numoftrials){
+  trial.summary[i,] = c(avgspikebyarea(i, session[[sessionNum]]),
+                          session[[sessionNum]]$feedback_type[i],
+                        session[[sessionNum]]$contrast_left[i],
+                        session[[sessionNum]]$contrast_right[i],
+                        i)
+}
+
+colnames(trial.summary) = c(names(avgspikebyarea(i, session = session[[sessionNum]])), 'Feedback', 'Left Contrast','Right Contrast','Trial' )
+
+trial.summary = as_tibble(trial.summary)
+```
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+areaColors = rainbow(n=numofareas, alpha=0.7)
+par(mfrow = c(1,1))
+
+plot(x=1, y=0, col='white',xlim=c(0,numoftrials), ylim=c(0.5,3.5), xlab="Trials", ylab = "Average Spike Counts", main = paste("Spikes Per Area in Session", sessionNum))
+
+for(i in 1 : numofareas){
+  lines(y=trial.summary[[i]], x=trial.summary$`Trial`, col = areaColors, lty=2, lwd=1)
+  lines(smooth.spline(trial.summary$`Trial`, trial.summary[[i]]), col=areaColors[i],lwd=3)
+}
+
+legend("topright", 
+  legend = colnames(trial.summary)[1:numofareas], 
+  col = areaColors, 
+  lty = 1, 
+  cex = 0.5
+)
+```
+
+
+
+The graph above depicts the average spikes for all brain areas in session 4 as a whole. As mentioned before, VISp had the highest average spikes for trial 88. We see that that pattern parallels for all of the trials as denoted by the VISp line (pink). On the contrary, brain area CA1 (orange) has the lowest average spikes across all trials. Earlier before for trial 88, we stated that ACA had the lowest average spike count.  
+
+Commenting on the shape of the graph, there is a noticeable difference in the gap between each brain area within the earlier trials compared to later on in the later trials. This is followed with a slight decrease in spike counts across all brain areas. A hypothesis I have about this trend could be that as experiments in the later trials proceed, fatigue could affect the mice' brain and alertness, causing fewer spike counts. 
+
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+par(mfrow = c(1,2))
+sessionNum2 = 1
+trialNum2 = 88 
+
+spiketrial2 = session[[sessionNum2]]$spks[[trialNum2]]
+brainarea2 = session[[sessionNum2]]$brain_area
+
+spikecount2 = apply(spiketrial2, 1, sum)
+
+newtmp = data.frame(
+  area2 = brainarea2,
+  spikes2 = spikecount2
+)
+
+
+spikeavg2 = newtmp %>%
+  group_by(area2) %>%
+  summarize(mean = mean(spikes2))
+
+avgspikebyarea2 = function(trialNum2, sessionNum2){
+  spiketrial2 = sessionNum2$spks[[trialNum2]]
+  area2 = sessionNum2$brain_area
+  spkcount2 = apply(spiketrial2, 1, sum)
+  spikeavg2 = tapply(spkcount2, area2, mean)
+  return(spikeavg2)
+}
+
+numoftrials2 = length(session[[sessionNum2]]$feedback_type)
+numofareas2 = length(unique(session[[sessionNum2]]$brain_area))
+
+trial.summary2 = matrix(nrow=numoftrials2, ncol= numofareas2+1+2+1)
+for(i in 1:numoftrials2){
+  trial.summary2[i,] = c(avgspikebyarea2(i, session[[sessionNum2]]),
+                          session[[sessionNum2]]$feedback_type[i],
+                        session[[sessionNum2]]$contrast_left[i],
+                        session[[sessionNum2]]$contrast_right[i],
+                        i)
+}
+
+colnames(trial.summary2) = c(names(avgspikebyarea2(i, session = session[[sessionNum2]])), 'Feedback', 'Left Contrast','Right Contrast','Trial' )
+
+trial.summary2 = as_tibble(trial.summary2)
+
+areaColors2 = rainbow(n=numofareas2, alpha=0.7)
+
+plot(x=1, y=0, col='white',xlim=c(0,numoftrials2), ylim=c(0.5,3.5), xlab="Trials", ylab = "Average Spike Counts", main = paste("Spikes Per Area in Session", sessionNum2))
+
+for(i in 1 : numofareas2){
+  lines(y=trial.summary2[[i]], x=trial.summary2$`Trial`, col = areaColors2, lty=2, lwd=1)
+  lines(smooth.spline(trial.summary2$`Trial`, trial.summary2[[i]]), col=areaColors2[i],lwd=3)
+}
+
+legend("topright", 
+  legend = colnames(trial.summary2)[1:numofareas2], 
+  col = areaColors2, 
+  lty = 1, 
+  cex = 0.4
+)
+
+sessionNum3 = 17
+trialNum3 = 88 
+
+spiketrial3 = session[[sessionNum3]]$spks[[trialNum3]]
+brainarea3 = session[[sessionNum3]]$brain_area
+
+spikecount3 = apply(spiketrial3, 1, sum)
+
+newtmp = data.frame(
+  area3 = brainarea3,
+  spikes3 = spikecount3
+)
+
+
+spikeavg3 = newtmp %>%
+  group_by(area3) %>%
+  summarize(mean = mean(spikes3))
+
+avgspikebyarea3 = function(trialNum3, sessionNum3){
+  spiketrial3 = sessionNum3$spks[[trialNum3]]
+  area3 = sessionNum3$brain_area
+  spkcount3 = apply(spiketrial3, 1, sum)
+  spikeavg3 = tapply(spkcount3, area3, mean)
+  return(spikeavg3)
+}
+
+numoftrials3 = length(session[[sessionNum3]]$feedback_type)
+numofareas3 = length(unique(session[[sessionNum3]]$brain_area))
+
+trial.summary3 = matrix(nrow=numoftrials3, ncol= numofareas3+1+2+1)
+for(i in 1:numoftrials3){
+  trial.summary3[i,] = c(avgspikebyarea3(i, session[[sessionNum3]]),
+                          session[[sessionNum3]]$feedback_type[i],
+                        session[[sessionNum3]]$contrast_left[i],
+                        session[[sessionNum3]]$contrast_right[i],
+                        i)
+}
+
+colnames(trial.summary3) = c(names(avgspikebyarea3(i, session = session[[sessionNum3]])), 'Feedback', 'Left Contrast','Right Contrast','Trial' )
+
+trial.summary3 = as_tibble(trial.summary3)
+
+areaColors3 = rainbow(n=numofareas3, alpha=0.7)
+
+plot(x=1, y=0, col='white',xlim=c(0,numoftrials3), ylim=c(0.5,3.5), xlab="Trials", ylab = " ", main = paste("Spikes Per Area in Session", sessionNum3))
+
+for(i in 1 : numofareas3){
+  lines(y=trial.summary3[[i]], x=trial.summary3$`Trial`, col = areaColors3, lty=2, lwd=1)
+  lines(smooth.spline(trial.summary3$`Trial`, trial.summary3[[i]]), col=areaColors3[i],lwd=3)
+}
+
+legend("topright", 
+  legend = colnames(trial.summary3)[1:numofareas3], 
+  col = areaColors3, 
+  lty = 1, 
+  cex = 0.4
+)
+```
+
+
+
+I went ahead to visualize and compare session 1 and 17 since we found session 1 to have the lowest success rate and session 17 had the highest success rate. Session 1, as depicted on the graph on the left, shows that the brain area SUB had the highest average spike count. For session 17, the brain area LD is shown to have the highest spike count average. Like session 4, session 1 has a slight decrease in average spike counts as there is an increase in trials. We cannot say the same for session 17, although, there seems to be much more fluctuation in spike counts between each trial. 
+
+
+## 3. Data Inegration
+
+```{r echo=FALSE, eval=TRUE, fig.align='center', warning = FALSE}
+maxtrials = max(sapply(session, function(x) length(x$spks)))
+avgspikematrix = matrix(0, nrow = maxtrials, ncol = 40)
+
+
+trialcount = rep(0, length(session))
+
+for (i in 1:length(session)){
+  quanttrials = length(session[[i]]$spks)
+  
+  for (k in 1:quanttrials){
+    spkmatrix = session[[i]]$spks[[k]]
+    
+    if (dim(spkmatrix)[1] > maxtrials) { 
+      spkmatrix = spkmatrix[1: maxtrials,]
+    }
+    
+    fullspkmatrix = rbind(spkmatrix, matrix(0, nrow = maxtrials - dim(spkmatrix)[1], ncol = 40))
+    
+    avgspikematrix = avgspikematrix + fullspkmatrix
+    trialcount[i] = trialcount[i] + 1
+    
+  }
+}
+
+avgspksession = avgspikematrix / trialcount
+sessionavgdf = as.data.frame(avgspksession)
+
+finsessionavgdf = sessionavgdf[1:10, 1:7]
+finsessionavgdf
+```
+
+
+Above I provided the first 10 rows of a new data frame consisting of the average spike matrices across all 18 sessions. I only included the first 7 timebins as providing all 40 would be redundant and messy. All sessions do not have the same amount of trials, meaning, I had to find the session with the highest trial count and iterate that count across all trials. Since the other sessions did not have the same amount of trials, I had to standardize the matrix, making sure that all the matrices have the same dimensions. Doing so allowed me to continue to find the average spike matrix across each session which then I placed in the empty data frame, as seen above. The dimensions of the full matrix is 447 by 40 with 40 representing the timebins. 
+
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+pca_result = prcomp(sessionavgdf, scale. = TRUE)
+eigenvalues = pca_result$sdev^2
+
+prop_variance = eigenvalues / sum(eigenvalues)
+
+pca_table = data.frame(PC = paste0("PC", 1:length(eigenvalues)),
+                        Eigenvalues = eigenvalues,
+                        ProportionVariance = prop_variance)
+
+
+head(pca_table)
+```
+
+
+The information provided above shows information about Principle Component Analysis on our data frame I made prior. The purpose of PCA is to reduce the complexity of data while keeping as much of the variation present with our data. The column "Eigenvalues" represents the variance explained by each principle component. The higher the eignen value, the more the principle component captures variance within the data set. The column "ProportionVariance" indicated the fraction of the total variance explained by the principle components. We can view this data better by creating a scree plot. 
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+plot(eigenvalues, type = "b", 
+     xlab = "Principal Component", ylab = "Eigenvalue",
+     main = "Scree Plot", col = "blue",
+     pch = 19, # Type of point
+     lwd = 2, # Line width for points and lines
+     cex = 1, # Size of points
+     cex.axis = 0.9, # Size of axis labels
+     cex.lab = 1, # Size of x and y labels
+     cex.main = 1.2) # Size of the main title
+     abline(h = 1, col = "red", lty = 1) 
+
+below_one = which(eigenvalues < 1.5)[1] # Find the first eigenvalue less than 1
+if (!is.na(below_one)) {
+  points(below_one, eigenvalues[below_one], col = "yellow", pch = 19, cex = 1) #
+}
+
+below_one2 =which(eigenvalues < 1.1)[1] # Find the first eigenvalue less than 1
+if (!is.na(below_one2)) {
+  points(below_one2, eigenvalues[below_one2], col = "yellow", pch = 19, cex = 1) #
+}
+
+
+```
+
+
+Looking at the scree plot, we can determine that the first four principle components remain the most significant out of all 40. This is shown by the first four blue plot points being fully above the red line which indicates the Kaiser criterion. The Kaiser criterion suggests that we should only keep the principle components of eignen values greater than one. Although principle components 5 and 6 are greater than one, their values don't differ enough from one for me to consider them. This is shown by the the two yellow points that overlap the red line on the graph. With that being said, I can conclude that the first four principle components are key factors in explaining the variance in average spikes across the sessions. 
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+pca_result2 = prcomp(sessionavgdf, scale. = TRUE)
+pc_scores = pca_result2$x[, 1:4]
+df_first_4_pc = as.data.frame(pc_scores)
+
+kmeans_result = kmeans(df_first_4_pc, centers = 4)
+
+ggplot(df_first_4_pc, aes(x = PC1, y = PC2, color = factor(kmeans_result$cluster))) +
+  geom_point(alpha = 88) + # Plot points with transparency for better visualization
+  scale_color_manual(values = rainbow(4)) + # Color code based on cluster
+  labs(title = "K-Means Clustering on First 4 PCs", 
+       x = "Principal Component 1", 
+       y = "Principal Component 2", 
+       color = "Cluster") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+       
+```
+
+
+The graph above depicts a scatter plot, found by using the k-means clustering method. Since we concluded prior that the first four PCs were the most significant, I chose four clusters. Clusters 1 and 2 are bounded relatively tightly, indicating similar characteristics within those points. In comparison, clusters 3 and 4 show more dispersion.  
+
+
+## 4. Predictive Modeling
+
+
+To proceed with predictive modeling, I split the average spike matrix data into a training and testing data set. The split I decided to use is 80% and 20% since it is used in common practice. With the information gathered from the four principle components, I will test a predictive model using the support vector machine classifier since an advantage of an SVM model is the ability to utilize non-linear decision making. In other words, it is much better at modeling more complex relationships. I came to this conclusion given that our data set has many variables that don't seem to lead to a direct outcome. 
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+set.seed(88)
+principalcomponents = pca_result$x
+selectedcomponents = principalcomponents[, 1:4]
+
+labels = numeric()
+for (session_num in 1:18) {
+  session_labels = session[[session_num]]$feedback_type
+  
+  labels = c(labels, session_labels)
+}
+
+labels = labels[1:nrow(selectedcomponents)]
+labels = as.factor(labels)
+
+train_indices = createDataPartition(labels, p = 0.8, list = FALSE)
+train_data = selectedcomponents[train_indices, ]
+train_labels = labels[train_indices]
+test_data = selectedcomponents[-train_indices, ]
+test_labels = labels[-train_indices]
+
+trainmodel = glm(train_labels ~ ., data = as.data.frame(train_data), family = binomial)
+predictionmodel = predict(trainmodel, newdata = as.data.frame(test_data), type = "response")
+
+predictionlabels = ifelse(predictionmodel > 0.5, 1, 0)
+accuracy = mean(predictionlabels == test_labels)
+print(paste("Accuracy:", accuracy))
+misclassificationerror = 1 - accuracy
+print(paste("Misclassification Error:", misclassificationerror))
+```
+
+
+The information provided above represent the accuracy and misclassification error of the predictive modeling. Accuracy indicates the percentage of correct predictions made from the total predictions. Misclassification indicates the percentage of incorrect predictions made from the toal predictions. 
+
+I received an accuracy value of ~64% indicating that the model predicted nearly two-thirds of the instanced in the data set correctly. On the other hand, the model was unable to predict the remaining 36%. We can see visualize this better with a confusion matrix.
+
+
+```{r echo=FALSE, eval=TRUE, fig.align='center'}
+lolmodel = svm(train_data, train_labels)
+lolmodel2 = predict(lolmodel, test_data)
+confusion_matrix = table(Predicted = lolmodel2, Actual = test_labels)
+confusion_matrix
+```
+
+
+The confusion matrix above provides useful information that supports the accuracy and misclassification values I received prior. The true positives, represented by 57, shows that there were 57 instances where the model correctly predicted the positive class. The false negatives, represented by 32, shows that there were 32 instanced in which the model wasn't able to correctly predict the negative class. Unfortunately, there aren't any instances of the model finding true negatives, which would be correctly identifying negative outcomes. Luckily, we have no false negatives which would be incorrectly predicting negative instances as positive. This is also known as a Type II error.  
+
+
+```{r message=FALSE, echo=FALSE, eval=TRUE, fig.align='center'}
+auroc = roc(test_labels, predictionmodel)
+auroc
+plot(auroc, main ="ROC Curve")
+auc_value = auc(auroc)
+legend("bottomright", legend = paste("AUC =", round(auc_value, digits = 4)), col = "blue", lwd = 2)
+
+threshold = coords(auroc, "best", ret="threshold", best.method="closest.topleft")
+threshold
+```
+
+
+I went ahead and plotted an ROC plot which allows us to visualize how well our model is able to trade-off between the true positive rate, represented by "Sensitivity", and the false positive rate, or specificity. The AUC (Area under the curve) value is a numerical value that represents the model's ability to discriminate between the two. An AUC value of 0.6223 indicates that the model is better than having zero ability in suggesting discriminate ability, which would be an AUC value of 0.5. The threshold value I chose is 0.6054298 since it is the closest to the top left. I interpret this value as a cutoff point in which we want our model's prediction to have an accuracy above ~60%. 
+
+
+## 5. Prediction Performance on the Test Sets
+
+```{r echo=FALSE, eval=TRUE, fig.align='center', warning = FALSE}
+finaltest =list()
+for(i in 1:2){
+  finaltest[[i]]=readRDS(paste('./test/test',i,'.rds',sep=''))
+}
+
+maxtrialsfinal = max(sapply(finaltest, function(x) length(x$spks)))
+avgspikematrixfinal = matrix(0, nrow = maxtrialsfinal, ncol = 40)
+
+finaltrialcount = rep(0, length(finaltest))
+
+for (i in 1:length(finaltest)){
+  finaltrials = length(finaltest[[i]]$spks)
+  
+  for (k in 1:finaltrials){
+    finalspkmatrix = finaltest[[i]]$spks[[k]]
+    
+    if (dim(finalspkmatrix)[1] > maxtrialsfinal) { 
+      finalspkmatrix = finalspkmatrix[1: maxtrialsfinal,]
+    }
+    
+    finalfullspkmatrix = rbind(finalspkmatrix, matrix(0, nrow = maxtrialsfinal - dim(finalspkmatrix)[1], ncol = 40))
+    
+    avgspikematrixfinal = avgspikematrixfinal + finalfullspkmatrix
+    finaltrialcount[i] = finaltrialcount[i] + 1
+    
+  }
+}
+
+finalavgspksession = avgspikematrixfinal / finaltrialcount
+finalsessionavgdf = as.data.frame(finalavgspksession)
+
+finalpca_result = prcomp(finalsessionavgdf, scale. = TRUE)
+
+finalpca_result2 = prcomp(finalsessionavgdf, scale. = TRUE)
+finalpc_scores = finalpca_result2$x[, 1:4]
+
+set.seed(88)
+finalprincipalcomponents = finalpca_result$x
+finalselectedcomponents = finalprincipalcomponents[, 1:4]
+
+
+finallabels = numeric()
+for (finalnum in 1:2) {
+  labelsfinal = finaltest[[finalnum]]$feedback_type
+  
+  finallabels = c(finallabels, labelsfinal)
+}
+
+
+
+finallabels = finallabels[1:nrow(finalselectedcomponents)]
+
+train_indices = createDataPartition(labels, p = 0.8, list = FALSE)
+train_data = selectedcomponents[train_indices, ]
+train_labels = labels[train_indices]
+test_data = finalselectedcomponents
+test_labels = finallabels
+
+
+finaltrainmodel = glm(train_labels ~ ., data = as.data.frame(train_data), family = binomial)
+finalpredictionmodel = predict(finaltrainmodel, newdata = as.data.frame(test_data), type = "response")
+
+finalpredictionlabels = ifelse(predictionmodel > 0.5, 1, 0)
+accuracy = mean(finalpredictionlabels == test_labels)
+print(paste("Accuracy:", accuracy))
+misclassificationerror = 1 - accuracy
+print(paste("Misclassification Error:", misclassificationerror))
+
+finallolmodel = svm(train_data, train_labels)
+finallolmodel2 = predict(finallolmodel, test_data)
+finalconfusion_matrix = table(Predicted = finallolmodel2, Actual = test_labels)
+finalconfusion_matrix
+
+```
+
+## 6. Discussion
+
+I commenced my project by analyzing the provided data set, performing regression analysis to explore relationships between all variables and the success rate of mice. However, due to the absence of clear correlations across all sessions, I narrowed my focus to a specific session. Here, I visualized the average spike count against individual trials based on brain area. I proceeded by using principle component analysis along with clustering based on the average spikes matrix across all sessions and trials. Performing PCA allowed me to receive numerical values of eignen values which I used to interpret on how many principle components I should use in the following steps. Plotting a scree plot allowed me to visualize this concept further. After being satisfied with the k-means cluster plot depiction, I went ahead and partitioned the data set into an 80/20 split for the training and testing based on the derived principle components. Subsequently, I assessed the accuracy, misclassification error, and confusion matrix from the testing and training sets to evaluate the predictive model's performance. 
+
+In the end, I was able to use the predictive model I constructed on the new data set provided. I believe that I was able to create an effective model as my model was able to garner an accuracy of 72% indicating that the model predicted nearly three-fourths of the instanced in the data set correctly. In fact, this performed better than my initial construction. 
+
+One thing I struggled with in this project was organizing the raw data given that there was an immense amount of data to cover. After overcoming that initial hump, I used the guidance of the TA Jue and professor Shizhe Chen to help me proceed with my project. 
+
+## Reference
+
+The majority of the concepts and reasoning were developed by myself. However, I did adopt and reference code from my TA as well as professor Shizhe Chen. I also heavily consulted ChatGPT whenever I wanted to develop a deeper understanding on code, debugging my code, or help me code in general. I consulted my friends when I had questions when debugging as well. Everyone and ChatGPT were a great help throughout the entire process. 
+
+ChatGPT: 
+
+
+
+
+
+
+
+
+
+
+
