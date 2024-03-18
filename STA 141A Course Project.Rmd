@@ -591,7 +591,7 @@ One thing I struggled with in this project was organizing the raw data given tha
 
 The majority of the concepts and reasoning were developed by myself. However, I did adopt and reference code from my TA as well as professor Shizhe Chen. I also heavily consulted ChatGPT whenever I wanted to develop a deeper understanding on code, debugging my code, or help me code in general. I consulted my friends when I had questions when debugging as well. Everyone and ChatGPT were a great help throughout the entire process. 
 
-ChatGPT: 
+ChatGPT: I was unable to provide a link to my ChatGPT log since ChatGPT 4 doesn't allow sharing links with uploaded pictures. I instead provided a screen recording of all my history. 
 
 
 
